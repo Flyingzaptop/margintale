@@ -95,6 +95,15 @@ def add_atr(bars):
 
 @njit(cache=True)
 def _run(o, h, l, c, atr, ema, filt, start, end, deposit, p):
+    return _run_core(o, h, l, c, atr, ema, filt, start, end, deposit, p,
+                     np.empty(0, np.int64), np.empty(0), False)
+
+
+@njit(cache=True)
+def _run_core(o, h, l, c, atr, ema, filt, start, end, deposit, p, dep_idx, dep_amt, rec_wd):
+    """dep_idx / dep_amt: external deposits (bar, $), sorted. A dead account with deposits
+    still to come goes dormant and restarts on the next one (deposit reference = new balance).
+    rec_wd: also return cumulative withdrawn per bar."""
     dirs, step_v, step_atr, step_grow = p[0], p[1], p[2], p[3]
     mult, max_orders, tp_v, tp_atr = p[4], p[5], p[6], p[7]
     sl, leverage, risk = p[8], p[9], p[10]
@@ -125,9 +134,25 @@ def _run(o, h, l, c, atr, ema, filt, start, end, deposit, p):
     peak = deposit
     maxdd = 0.0              # max drawdown of worst-case equity from the closing peak
     died = -1
+    deaths = 0
+    dormant = False
+    di = 0
+    wd_arr = np.zeros(end - start if rec_wd else 1)
 
     for i in range(start, end):
         k = i - start
+        while di < len(dep_idx) and dep_idx[di] <= i:
+            balance += dep_amt[di]
+            di += 1
+            if dormant:
+                dormant = False
+                deposit = balance
+                peak = balance
+        if rec_wd:
+            wd_arr[k] = withdrawn
+        if dormant:
+            equity[k] = balance
+            continue
         if wd_days < 0 and filt[0, i] < filt[0, i - 1]:  # dynamic daily withdrawal
             age += 1
             if n_ord[0] == 0 and n_ord[1] == 0 and balance > wd_floor * deposit:
@@ -235,9 +260,16 @@ def _run(o, h, l, c, atr, ema, filt, start, end, deposit, p):
             n_ord[:] = 0
             stopouts += 1
             if balance < DEAD * deposit:
+                deaths += 1
+                maxdd = 1.0
+                if di < len(dep_idx):
+                    dormant = True
+                    equity[k] = balance
+                    continue
                 died = i
                 equity[k:] = balance
-                maxdd = 1.0
+                if rec_wd:
+                    wd_arr[k:] = withdrawn
                 break
 
         # favourable side: take profit
@@ -263,7 +295,7 @@ def _run(o, h, l, c, atr, ema, filt, start, end, deposit, p):
 
     if died < 0:  # close what is left at the last close
         balance = equity[end - start - 1]
-    return balance, min_eq, died, cycles, stops, stopouts, equity, min(maxdd, 1.0), withdrawn
+    return balance, min_eq, died, cycles, stops, stopouts, equity, min(maxdd, 1.0), withdrawn, deaths, wd_arr
 
 
 @njit(parallel=True, cache=True)
@@ -305,7 +337,7 @@ class Market:
     def run(self, p: Params, start, end, deposit=1000.0):
         i0, i1 = self.span(start, end)
         arr = np.array(astuple(p), dtype=np.float64)
-        bal, min_eq, died, cyc, stops, so, eq, maxdd, wd = _run(
+        bal, min_eq, died, cyc, stops, so, eq, maxdd, wd, _, _ = _run(
             self.o, self.h, self.l, self.c, self.atr, self.ema(p.ema), self.filt, i0, i1, deposit, arr)
         return dict(balance=bal, min_eq=min_eq, died=self.index[died] if died >= 0 else None,
                     cycles=cyc, stops=stops, stopouts=so, maxdd=maxdd, withdrawn=wd,
