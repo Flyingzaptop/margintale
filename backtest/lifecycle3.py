@@ -26,8 +26,11 @@ RISKS = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0, 12.0, 20.0, 30.0, 50.0, 80.0, 1
 ELITE, CHILDREN = 200, 2000
 
 
+UNIT, LOT = 1.0, 1.0  # contract granularity and fixed base size (oz); --gram sets a gram contract
+
+
 def fix(p, rng=None):
-    return replace(p, leverage=100.0)
+    return replace(p, leverage=100.0, unit_oz=UNIT, lot_oz=LOT)
 
 
 def sample(rng):
@@ -63,8 +66,12 @@ if __name__ == "__main__":
     ap.add_argument("--gens", type=int, default=8)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--min-s12", type=float, default=MIN_S12)
+    ap.add_argument("--gram", action="store_true", help="gram contract (GAUUSD: 0.01 lot = 1 g)")
     a = ap.parse_args()
     MIN_S12 = a.min_s12
+    if a.gram:  # fixed base: 1 g per $33 of deposit = the 1 oz per $1000 of XAUUSD
+        UNIT = 1 / 31.1035
+        LOT = max(1.0, round(a.deposit / 1000 * 31.1035)) * UNIT
     rng = random.Random(a.seed)
     m = Market()
     seen = {}
@@ -98,7 +105,7 @@ if __name__ == "__main__":
     _, eq, _ = m.lifecycles(fin, "2023-01", "2024-09", MONTHS, deposit=a.deposit)
     test = metrics(eq, a.deposit).add_prefix("test_")
     out = pd.concat([df.head(50).reset_index(drop=True), test], axis=1)
-    tag = f"d{int(a.deposit)}_s{a.seed}" + (f"_m{int(MIN_S12 * 100)}" if MIN_S12 != 0.6 else "")
+    tag = f"d{int(a.deposit)}_s{a.seed}" + ("_gram" if a.gram else "") + (f"_m{int(MIN_S12 * 100)}" if MIN_S12 != 0.6 else "")
     df.to_parquet(OUT / f"lifecycle3_{tag}.parquet")
     out.to_csv(OUT / f"lifecycle3_{tag}_final.csv", index=False)
     pd.set_option("display.width", 300)

@@ -57,6 +57,10 @@ class Params:
     wd_vol_g: float = 0.0
     wd_tau: float = 0.0
     lot_oz: float = 1.0    # base order size in oz when the lot does not grow (risk = 0)
+    # contract granularity: sizes are whole multiples of unit_oz (XAUUSD 0.01 lot = 1 oz;
+    # a gram contract such as GAUUSD 0.01 lot = 1 g = 1 / 31.1035 oz); extra entry cost $ per oz
+    unit_oz: float = 1.0
+    extra_cost: float = 0.0
 
 
 INT_GENES = {"dirs", "step_atr", "max_orders", "tp_atr", "ema", "er_win", "sess"}
@@ -113,6 +117,7 @@ def _run_core(o, h, l, c, atr, ema, filt, start, end, deposit, p, dep_idx, dep_a
     wd_days, wd_frac, wd_floor = int(p[17]), p[18], p[19]
     wd_vol_g, wd_tau = p[20], p[21]
     lot_oz = p[22]
+    unit, cost_oz = p[23], SPREAD + p[24]
     withdrawn = 0.0
     days = 0
     age = 0
@@ -195,12 +200,12 @@ def _run_core(o, h, l, c, atr, ema, filt, start, end, deposit, p, dep_idx, dep_a
             r = risk
             if pwm_k > 0:
                 r = risk * (1.0 - (deposit / eq_now) ** pwm_k) if eq_now > deposit else 0.0
-            b = lot_oz if r <= 0 else max(1.0, np.floor(eq_now / 1000.0 * r))
+            b = lot_oz if r <= 0 else max(unit, np.floor(eq_now / 1000.0 * r / unit) * unit)
             base[s] = b
             step[s] = step_v * atr[i - 1] if step_atr else step_v
             tp[s] = tp_v * atr[i - 1] if tp_atr else tp_v
             level[s] = o[i]
-            px = o[i] + SPREAD if s == 0 else o[i] - SPREAD
+            px = o[i] + cost_oz if s == 0 else o[i] - cost_oz
             n_ord[s] = 1
             oz[s] = b
             cost[s] = b * px
@@ -215,7 +220,7 @@ def _run_core(o, h, l, c, atr, ema, filt, start, end, deposit, p, dep_idx, dep_a
                 nxt = level[s] - step[s] if s == 0 else level[s] + step[s]
                 if (s == 0 and l[i] > nxt) or (s == 1 and h[i] < nxt):
                     break
-                lot = max(1.0, np.round(base[s] * mult ** n_ord[s]))
+                lot = max(unit, np.round(base[s] * mult ** n_ord[s] / unit) * unit)
                 if leverage > 0:  # broker rejects the add without free margin
                     eq_w = balance
                     marg = lot * nxt / leverage
@@ -227,7 +232,7 @@ def _run_core(o, h, l, c, atr, ema, filt, start, end, deposit, p, dep_idx, dep_a
                         break
                 level[s] = nxt
                 step[s] *= step_grow
-                px = nxt + SPREAD if s == 0 else nxt - SPREAD
+                px = nxt + cost_oz if s == 0 else nxt - cost_oz
                 n_ord[s] += 1
                 added[s] = True
                 oz[s] += lot
