@@ -51,6 +51,11 @@ class Params:
     wd_days: int = 0
     wd_frac: float = 0.0
     wd_floor: float = 1.0
+    # dynamic daily withdrawal (wd_days = -1): each new trading day, when no basket is open,
+    # withdraw wd_frac * m_vol * m_age of the balance, m_vol = clip(ATR / 20-day ATR, 0.5, 2) ** wd_vol_g,
+    # m_age = 1 + age_days / wd_tau (1 if wd_tau = 0); never below wd_floor x deposit
+    wd_vol_g: float = 0.0
+    wd_tau: float = 0.0
 
 
 INT_GENES = {"dirs", "step_atr", "max_orders", "tp_atr", "ema", "er_win", "sess"}
@@ -96,8 +101,10 @@ def _run(o, h, l, c, atr, ema, filt, start, end, deposit, p):
     er_win, er_max, sess, vol_max = int(p[12]), p[13], int(p[14]), p[15]
     pwm_k = p[16]
     wd_days, wd_frac, wd_floor = int(p[17]), p[18], p[19]
+    wd_vol_g, wd_tau = p[20], p[21]
     withdrawn = 0.0
     days = 0
+    age = 0
     sess_lo = (0, 0, 7, 12, 17)[sess]
     sess_hi = (24, 7, 12, 17, 24)[sess]
     n_ord = np.zeros(2, np.int64)
@@ -121,6 +128,15 @@ def _run(o, h, l, c, atr, ema, filt, start, end, deposit, p):
 
     for i in range(start, end):
         k = i - start
+        if wd_days < 0 and filt[0, i] < filt[0, i - 1]:  # dynamic daily withdrawal
+            age += 1
+            if n_ord[0] == 0 and n_ord[1] == 0 and balance > wd_floor * deposit:
+                v = min(max(filt[1, i - 1], 0.5), 2.0) ** wd_vol_g
+                rate = wd_frac * v * ((1.0 + age / wd_tau) if wd_tau > 0 else 1.0)
+                x = min(rate * balance, balance - wd_floor * deposit)
+                balance -= x
+                withdrawn += x
+                peak -= x
         if wd_days > 0 and filt[0, i] < filt[0, i - 1]:  # new trading day
             days += 1
             if days >= wd_days and n_ord[0] == 0 and n_ord[1] == 0:
