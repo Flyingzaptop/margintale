@@ -22,7 +22,7 @@ from evolve2 import sample2
 MONTHS = 24
 MIN_S12 = 0.6
 DEAD = 0.1  # engine.DEAD: an account is dead below this share of the deposit
-RISKS = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0]
+RISKS = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0, 12.0, 20.0]
 ELITE, CHILDREN = 200, 2000
 
 
@@ -62,7 +62,9 @@ if __name__ == "__main__":
     ap.add_argument("--n", type=int, default=3000)
     ap.add_argument("--gens", type=int, default=8)
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--min-s12", type=float, default=MIN_S12)
     a = ap.parse_args()
+    MIN_S12 = a.min_s12
     rng = random.Random(a.seed)
     m = Market()
     seen = {}
@@ -96,7 +98,7 @@ if __name__ == "__main__":
     _, eq, _ = m.lifecycles(fin, "2023-01", "2024-09", MONTHS, deposit=a.deposit)
     test = metrics(eq, a.deposit).add_prefix("test_")
     out = pd.concat([df.head(50).reset_index(drop=True), test], axis=1)
-    tag = f"d{int(a.deposit)}_s{a.seed}"
+    tag = f"d{int(a.deposit)}_s{a.seed}" + (f"_m{int(MIN_S12 * 100)}" if MIN_S12 != 0.6 else "")
     df.to_parquet(OUT / f"lifecycle3_{tag}.parquet")
     out.to_csv(OUT / f"lifecycle3_{tag}_final.csv", index=False)
     pd.set_option("display.width", 300)
