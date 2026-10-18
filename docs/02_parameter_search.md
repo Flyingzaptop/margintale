@@ -1,7 +1,7 @@
 # Перебор параметров сетки/мартингейла (XAUUSD M1, 2017–2026)
 
 Движок: `backtest/engine.py`, перебор: `backtest/search.py`, сводка: `backtest/analyze.py`
-(`python3 search.py 200 && python3 analyze.py`, ~8 минут на 4 ядрах).
+(`cd backtest && python3 search.py 200 && python3 analyze.py`, ~8 минут на 4 ядрах).
 
 ## Что варьировалось
 39 222 случайные конфигурации, каждая запускалась 10 раз: с 1 января 2017…2026 до конца года (2026 — до сентября),

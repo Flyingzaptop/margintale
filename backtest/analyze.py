@@ -2,7 +2,9 @@
 import numpy as np
 import pandas as pd
 
-df = pd.read_parquet("results/search.parquet")
+from pathlib import Path
+
+df = pd.read_parquet(Path(__file__).resolve().parent.parent / "results" / "search.parquet")
 P = ["dirs", "step", "step_atr", "step_grow", "mult", "max_orders", "tp", "tp_atr",
      "sl", "leverage", "risk", "ema"]
 Y = [f"y{y}" for y in range(2017, 2027)]
