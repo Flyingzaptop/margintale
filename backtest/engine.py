@@ -69,7 +69,7 @@ INT_GENES = {"dirs", "step_atr", "max_orders", "tp_atr", "ema", "er_win", "sess"
 def params_from(row):
     """Params from a mapping of gene values (e.g. a DataFrame row)."""
     return Params(**{k: int(row[k]) if k in INT_GENES else float(row[k])
-                     for k in Params.__dataclass_fields__})
+                     for k in Params.__dataclass_fields__ if k in row})
 
 
 def load_m1(path=DATA):
@@ -145,6 +145,9 @@ def _run_core(o, h, l, c, atr, ema, filt, start, end, deposit, p, dep_idx, dep_a
     dormant = False
     di = 0
     wd_arr = np.zeros(end - start if rec_wd else 1)
+    MAXC = 20000 if rec_wd else 1
+    cyc_bal = np.zeros(MAXC)   # balance after each closed basket (rec_wd only)
+    cyc_bar = np.zeros(MAXC, np.int64)
 
     for i in range(start, end):
         k = i - start
@@ -284,13 +287,17 @@ def _run_core(o, h, l, c, atr, ema, filt, start, end, deposit, p, dep_idx, dep_a
             if n_ord[s] == 0 or added[s]:
                 continue
             avg = cost[s] / oz[s]
+            closed = False
             if s == 0 and h[i] >= avg + tp[s]:
-                balance += oz[s] * tp[s]
-                n_ord[s] = 0
-                cycles += 1
+                closed = True
             elif s == 1 and l[i] <= avg - tp[s]:
+                closed = True
+            if closed:
                 balance += oz[s] * tp[s]
                 n_ord[s] = 0
+                if rec_wd and cycles < MAXC:
+                    cyc_bal[cycles] = balance
+                    cyc_bar[cycles] = i
                 cycles += 1
 
         eq_c = balance
@@ -302,7 +309,8 @@ def _run_core(o, h, l, c, atr, ema, filt, start, end, deposit, p, dep_idx, dep_a
 
     if died < 0:  # close what is left at the last close
         balance = equity[end - start - 1]
-    return balance, min_eq, died, cycles, stops, stopouts, equity, min(maxdd, 1.0), withdrawn, deaths, wd_arr
+    return (balance, min_eq, died, cycles, stops, stopouts, equity, min(maxdd, 1.0), withdrawn, deaths, wd_arr,
+            cyc_bal, cyc_bar)
 
 
 @njit(parallel=True, cache=True)
@@ -344,7 +352,7 @@ class Market:
     def run(self, p: Params, start, end, deposit=1000.0):
         i0, i1 = self.span(start, end)
         arr = np.array(astuple(p), dtype=np.float64)
-        bal, min_eq, died, cyc, stops, so, eq, maxdd, wd, _, _ = _run(
+        bal, min_eq, died, cyc, stops, so, eq, maxdd, wd, _, _, _, _ = _run(
             self.o, self.h, self.l, self.c, self.atr, self.ema(p.ema), self.filt, i0, i1, deposit, arr)
         return dict(balance=bal, min_eq=min_eq, died=self.index[died] if died >= 0 else None,
                     cycles=cyc, stops=stops, stopouts=so, maxdd=maxdd, withdrawn=wd,
