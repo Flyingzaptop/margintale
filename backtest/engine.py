@@ -16,7 +16,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from numba import njit
+from numba import njit, prange
 
 DATA = Path(__file__).resolve().parent.parent / "data" / "XAUUSD_41.parquet"
 SPREAD = 0.30 + 0.07  # spread + $7/lot round-turn commission
@@ -41,7 +41,10 @@ class Params:
 
 
 def load_m1(path=DATA):
-    bars = pd.read_parquet(path).set_index("timestamp")
+    return add_atr(pd.read_parquet(path).set_index("timestamp"))
+
+
+def add_atr(bars):
     rng5 = bars.high.rolling(5).max() - bars.low.rolling(5).min()
     bars["atr"] = rng5.rolling(1440, min_periods=60).mean().bfill()  # mean 5m range over a day
     return bars
@@ -177,6 +180,17 @@ def _run(o, h, l, c, atr, ema, start, end, deposit, p):
     return balance, min_eq, died, cycles, stops, stopouts, equity
 
 
+@njit(parallel=True, cache=True)
+def _run_batch(o, h, l, c, atr, emas, ema_idx, start, end, deposits, P):
+    out = np.empty(len(deposits))
+    for j in prange(len(deposits)):
+        out[j] = _run(o, h, l, c, atr, emas[ema_idx[j]], start, end, deposits[j], P[j])[0]
+    return out
+
+
+EMA_LENGTHS = (0, 1440, 7200, 28800)
+
+
 class Market:
     def __init__(self, bars=None):
         self.bars = load_m1() if bars is None else bars
@@ -205,3 +219,12 @@ class Market:
         return dict(balance=bal, min_eq=min_eq, died=self.index[died] if died >= 0 else None,
                     cycles=cyc, stops=stops, stopouts=so,
                     equity=pd.Series(eq, self.index[i0:i1]))
+
+    def run_batch(self, params, deposits, start, end):
+        """End balances of many accounts over the same span (parallel)."""
+        i0, i1 = self.span(start, end)
+        emas = np.stack([self.ema(n) for n in EMA_LENGTHS])
+        idx = np.array([EMA_LENGTHS.index(p.ema) for p in params], dtype=np.int64)
+        P = np.array([astuple(p) for p in params], dtype=np.float64)
+        return _run_batch(self.o, self.h, self.l, self.c, self.atr, emas, idx, i0, i1,
+                          np.asarray(deposits, dtype=np.float64), P)
