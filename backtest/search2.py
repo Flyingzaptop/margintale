@@ -30,7 +30,7 @@ ELITE = 200
 CHILDREN = 2000
 
 SPACE = {
-    "entry": [0, 1, 2], "dirs": [0, 0, 1, 2], "look": [0, 1, 2], "ema": [0, 1, 2],
+    "entry": [0, 1, 2, 3, 4], "dirs": [0, 0, 1, 2], "look": [0, 1, 2], "ema": [0, 1, 2],
     "offset": [0.0, 0.1, 0.3, 0.5, 1.0, 2.0], "sl": [0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0],
     "tp": [0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0, 12.0], "trail_start": [0.0, 0.0, 0.5, 1.0, 2.0, 3.0],
     "trail": [0.3, 0.5, 1.0, 2.0], "be": [0.0, 0.0, 0.5, 1.0, 2.0],
@@ -38,7 +38,7 @@ SPACE = {
     "sess": [0, 1, 2, 3, 4, 5], "vol_max": [0.0, 0.7, 1.0, 1.5], "er_win": [0, 1, 2, 3],
     "er_max": [0.02, 0.05, 0.1, 0.2], "risk": [0.005, 0.01, 0.02, 0.03, 0.05, 0.08],
     "loss_mult": [1.0, 1.0, 1.5, 2.0], "loss_cap": [1.0, 2.0, 4.0, 8.0],
-    "deposit": [100.0, 200.0, 300.0, 500.0, 1000.0],
+    "deposit": [100.0, 200.0, 300.0, 500.0, 1000.0], "exit_sig": [0, 1],
 }
 
 
@@ -140,7 +140,7 @@ if __name__ == "__main__":
     out.to_csv(OUT / f"search2_s{a.seed}_final.csv", index=False)
     pd.set_option("display.width", 300)
     pd.set_option("display.max_columns", 60)
-    cols = ["entry", "dirs", "sl", "tp", "trail_start", "be", "sess", "risk", "loss_mult", "deposit",
+    cols = ["entry", "exit_sig", "dirs", "sl", "tp", "trail_start", "be", "sess", "risk", "loss_mult", "deposit",
             "score", "s12", "s24", "life_med", "gm", "r2", "g12_med", "dd_med", "trades_m", "winrate",
             "test_s12", "test_life_med", "test_gm", "test_r2", "test_g12_med"]
     print(out[cols].head(20).round(3).to_string())

@@ -7,21 +7,25 @@ Broker model (Spotware cTrader demo, XAUUSD spec):
   charged when the trading day changes;
 * gold leverage 1:100, stop-out at 30% margin level; an entry needs free margin.
 
-Entries are pending orders placed when flat (and allowed by the filters):
+Entries when flat (and allowed by the filters), pending or market:
   entry 0 breakout: buy stop above the N-bar high + offset, sell stop below the N-bar low;
   entry 1 pullback: buy limit at EMA - offset when close > EMA, sell limit mirrored;
-  entry 2 range fade: buy limit at the N-bar low - offset, sell limit at the N-bar high + offset.
-Both sides are OCO; unfilled orders expire after `pend_life` bars.
+  entry 2 range fade: buy limit at the N-bar low - offset, sell limit at the N-bar high + offset;
+  entry 3 market with the trend: buy at the open if close > EMA, else sell;
+  entry 4 market reversion: buy at the open if close < EMA - offset, sell if > EMA + offset.
+Pending sides are OCO; unfilled orders expire after `pend_life` bars.
 
-Exits: SL / TP in ATR from the fill, break-even after `be` ATR in profit, trailing
-stop at `trail` ATR once `trail_start` ATR in profit, time stop after `max_hold` bars.
+Exits: SL / TP always set, in ATR from the fill; break-even after `be` ATR in profit,
+trailing stop at `trail` ATR once `trail_start` ATR in profit, time stop after
+`max_hold` bars, and with `exit_sig` the strategy closes at market when the close
+crosses the EMA against the position.
 
 Size: risk `risk` of equity at the stop distance, rounded down to whole ounces,
 at least 1 oz. After a loss the risk is multiplied by `loss_mult` (capped at
 `loss_cap` x base risk), after a win it resets.
 
 Intrabar order is pessimistic: stop before target; no target in the fill bar.
-Death: equity below DEAD_SHARE of the deposit or too small for a 1 oz position.
+Death: liquidation (margin level <= STOP_OUT) or equity too small to open 0.01 lot.
 """
 from dataclasses import dataclass, astuple, fields
 from pathlib import Path
@@ -38,7 +42,6 @@ SWAP_LONG = -0.020895     # $ per oz per day
 SWAP_SHORT = -0.0192
 LEVERAGE = 100.0
 STOP_OUT = 0.30
-DEAD_SHARE = 0.25
 
 LOOKBACKS = (15, 60, 240)
 EMAS = (60, 240, 1440)
@@ -68,6 +71,7 @@ class Genes:
     loss_mult: float = 1.0
     loss_cap: float = 1.0
     deposit: float = 300.0
+    exit_sig: int = 0      # 1 = close at market when close crosses the EMA against the position
 
 
 NG = len(fields(Genes))
@@ -97,6 +101,8 @@ def _run(o, h, l, c, atr, hh, ll, ema, er, volr, hour, day, wday, start, end, g,
     max_hold, pend_life, sess = int(g[10]), int(g[11]), int(g[12])
     vol_max, er_win, er_max = g[13], int(g[14]), g[15]
     risk0, loss_mult, loss_cap, deposit = g[16], g[17], g[18], g[19]
+    exit_sig = int(g[20])
+    liquidated = False
     s_lo = (0, 0, 7, 12, 17, 7)[sess]
     s_hi = (24, 7, 12, 17, 24, 17)[sess]
 
@@ -145,9 +151,18 @@ def _run(o, h, l, c, atr, hh, ll, ema, er, volr, hour, day, wday, start, end, g,
                     up = c[i - 1] > e
                     buy_lvl = e - offset * a if up else -1.0
                     sell_lvl = e + offset * a if not up else -1.0
-                else:
+                elif entry == 2:
                     buy_lvl = ll[look, i] - offset * a
                     sell_lvl = hh[look, i] + offset * a
+                else:  # market entries
+                    e = ema[ema_i, i - 1]
+                    if entry == 3:
+                        up = c[i - 1] > e
+                        buy_lvl = 1.0 if up else -1.0
+                        sell_lvl = 1.0 if not up else -1.0
+                    else:
+                        buy_lvl = 1.0 if c[i - 1] < e - offset * a else -1.0
+                        sell_lvl = 1.0 if c[i - 1] > e + offset * a else -1.0
                 if dirs == 2:
                     buy_lvl = -1.0
                 if dirs == 1:
@@ -165,6 +180,11 @@ def _run(o, h, l, c, atr, hh, ll, ema, er, volr, hour, day, wday, start, end, g,
                     side, fill = 1, max(buy_lvl, o[i])
                 elif sell_lvl > 0 and l[i] <= sell_lvl:
                     side, fill = -1, min(sell_lvl, o[i])
+            elif entry >= 3:  # market at the open
+                if buy_lvl > 0:
+                    side, fill = 1, o[i]
+                elif sell_lvl > 0:
+                    side, fill = -1, o[i]
             else:           # limit orders
                 if buy_lvl > 0 and l[i] <= buy_lvl:
                     side, fill = 1, min(buy_lvl, o[i])
@@ -210,6 +230,7 @@ def _run(o, h, l, c, atr, hh, ll, ema, er, volr, hour, day, wday, start, end, g,
                 eq_w = bal + (oz * (worst - px) if pos > 0 else oz * (px - worst))
                 if eq_w <= STOP_OUT * oz * worst / LEVERAGE:
                     exit_px = worst
+                    liquidated = True
             if exit_px < 0 and not filled_now:
                 if pos > 0 and h[i] >= target:
                     exit_px = target
@@ -217,6 +238,10 @@ def _run(o, h, l, c, atr, hh, ll, ema, er, volr, hour, day, wday, start, end, g,
                     exit_px = target
             if exit_px < 0 and max_hold > 0 and held >= max_hold:
                 exit_px = c[i]
+            if exit_px < 0 and exit_sig and not filled_now:
+                e = ema[ema_i, i]
+                if (pos > 0 and c[i] < e) or (pos < 0 and c[i] > e):
+                    exit_px = c[i]
             if exit_px >= 0:
                 pnl = oz * (exit_px - px) if pos > 0 else oz * (px - exit_px)
                 bal += pnl
@@ -252,7 +277,7 @@ def _run(o, h, l, c, atr, hh, ll, ema, er, volr, hour, day, wday, start, end, g,
         while ck < nck and i + 1 >= checks[ck]:
             out_eq[ck] = eq_c
             ck += 1
-        if eq_c < DEAD_SHARE * deposit or eq_c * LEVERAGE < c[i] * 1.2:
+        if liquidated or (pos == 0 and eq_c * LEVERAGE < c[i]):
             died = i
             maxdd = max(maxdd, 1.0 - eq_c / peak)
             while ck < nck:
