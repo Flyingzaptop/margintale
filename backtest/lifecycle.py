@@ -5,8 +5,10 @@ run for up to 24 months. From that:
 
 * survival curve S(k): share of starts still alive at the end of month k;
 * safe window T: the last month with S(T) >= SAFE (death is rare before T);
-* score: mean equity multiple at T over all starts (the dead count as ~0),
-  annualised: mean_mult ** (12 / T) - 1. Used as "start, run T months, withdraw".
+* score: median equity multiple at T over all starts (the dead count as ~0),
+  annualised: med_mult ** (12 / T) - 1, only if T >= MIN_T. Used as "start, run
+  T months, withdraw". Median, not mean: a few compounding outliers must not
+  carry the score.
 
 Random search, then genetic refinement around the best.
 
@@ -24,6 +26,7 @@ from evolve import OUT, REGIME, mutate
 from evolve2 import sample2
 
 SAFE = 0.9
+MIN_T = 6
 DEAD = 100.0
 ELITE = 200
 CHILDREN = 2000
@@ -44,7 +47,7 @@ def metrics(eq):
         med_mult = np.median(eq[j, :, t - 1]) / 1000 if t else 0.0
         life = np.where(alive[j].all(axis=1), MONTHS + 1, alive[j].argmin(axis=1) + 1)
         rows.append(dict(T=t, grow=mult, med_grow=med_mult,
-                         score=mult ** (12 / t) - 1 if t and mult > 0 else -1.0,
+                         score=med_mult ** (12 / t) - 1 if t >= MIN_T and med_mult > 0 else -1.0 + t / MONTHS,
                          s6=surv[j, 5], s12=surv[j, 11], s24=surv[j, 23],
                          life_med=float(np.median(life)), life_q25=float(np.percentile(life, 25)),
                          worst=eq[j, :, t - 1].min() / 1000 if t else 0.0))
