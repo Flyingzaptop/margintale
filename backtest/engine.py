@@ -56,6 +56,7 @@ class Params:
     # m_age = 1 + age_days / wd_tau (1 if wd_tau = 0); never below wd_floor x deposit
     wd_vol_g: float = 0.0
     wd_tau: float = 0.0
+    lot_oz: float = 1.0    # base order size in oz when the lot does not grow (risk = 0)
 
 
 INT_GENES = {"dirs", "step_atr", "max_orders", "tp_atr", "ema", "er_win", "sess"}
@@ -111,6 +112,7 @@ def _run_core(o, h, l, c, atr, ema, filt, start, end, deposit, p, dep_idx, dep_a
     pwm_k = p[16]
     wd_days, wd_frac, wd_floor = int(p[17]), p[18], p[19]
     wd_vol_g, wd_tau = p[20], p[21]
+    lot_oz = p[22]
     withdrawn = 0.0
     days = 0
     age = 0
@@ -193,7 +195,7 @@ def _run_core(o, h, l, c, atr, ema, filt, start, end, deposit, p, dep_idx, dep_a
             r = risk
             if pwm_k > 0:
                 r = risk * (1.0 - (deposit / eq_now) ** pwm_k) if eq_now > deposit else 0.0
-            b = 1.0 if r <= 0 else max(1.0, np.floor(eq_now / 1000.0 * r))
+            b = lot_oz if r <= 0 else max(1.0, np.floor(eq_now / 1000.0 * r))
             base[s] = b
             step[s] = step_v * atr[i - 1] if step_atr else step_v
             tp[s] = tp_v * atr[i - 1] if tp_atr else tp_v

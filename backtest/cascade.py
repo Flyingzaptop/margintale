@@ -1,6 +1,6 @@
 """Cascade: the safe account feeds an aggressive account only with what it withdraws.
 
-1. SAFE ($300, fixed 0.01 lot) withdraws once a month 50% of the balance above
+1. SAFE (fixed lot: 0.01 per $300 of the deposit) withdraws once a month 50% of the balance above
    2 x deposit (docs/09_withdrawal.md) -- not to the pocket but to account B.
 2. Account B trades only that money (lot grows with its balance) and pays out to
    the pocket by its own withdrawal rule. If B dies it waits for the next transfer
@@ -8,9 +8,10 @@
 Value of a start at 24 months = pocket + what is left on both accounts (if alive).
 Starts: 1st of every month 2017-01..2024-09.
 
-    python3 cascade.py
+    python3 cascade.py [deposit]
 """
 from dataclasses import astuple, replace
+import sys
 from itertools import product
 from pathlib import Path
 
@@ -22,9 +23,9 @@ from phases import AGRO
 from pwm import SAFE
 
 ROOT = Path(__file__).resolve().parent.parent
-DEP = 300.0
+DEP = float(sys.argv[1]) if len(sys.argv) > 1 else 300.0
 MONTHS = 24
-FEED = replace(SAFE, wd_days=21, wd_frac=0.5, wd_floor=2.0)
+FEED = replace(SAFE, wd_days=21, wd_frac=0.5, wd_floor=2.0, lot_oz=max(1.0, DEP // 300))  # 0.01 lot per $300
 STARTS = pd.date_range("2017-01-01", "2024-09-01", freq="MS", tz="UTC")
 NO_DEP = (np.empty(0, np.int64), np.empty(0))
 
@@ -75,7 +76,7 @@ if __name__ == "__main__":
                          хуже_депозита=(val < DEP).mean(), в_кармане_мед=np.median(pocket),
                          смертей_B_ср=np.mean(deaths)))
     df = pd.DataFrame(rows)
-    df.to_csv(ROOT / "results" / "cascade.csv", index=False)
+    df.to_csv(ROOT / "results" / f"cascade_d{int(DEP)}.csv", index=False)
     pd.set_option("display.width", 250)
     f = lambda d: d.to_string(index=False, float_format=lambda v: f"{v:.3g}")
     print(f(df.head(1)))
