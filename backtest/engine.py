@@ -94,6 +94,8 @@ def _run(o, h, l, c, atr, ema, filt, start, end, deposit, p):
     stops = 0
     stopouts = 0
     min_eq = deposit
+    peak = deposit
+    maxdd = 0.0              # max drawdown of worst-case equity from the closing peak
     died = -1
 
     for i in range(start, end):
@@ -177,6 +179,7 @@ def _run(o, h, l, c, atr, ema, filt, start, end, deposit, p):
                 if leverage > 0:
                     marg += oz[s] * worst / leverage
         min_eq = min(min_eq, eq_w)
+        maxdd = max(maxdd, 1.0 - eq_w / peak)
         if eq_w <= 0 or (leverage > 0 and marg > 0 and eq_w <= STOP_OUT * marg):
             balance = max(eq_w, 0.0)
             n_ord[:] = 0
@@ -184,6 +187,7 @@ def _run(o, h, l, c, atr, ema, filt, start, end, deposit, p):
             if balance < DEAD * deposit:
                 died = i
                 equity[k:] = balance
+                maxdd = 1.0
                 break
 
         # favourable side: take profit
@@ -205,18 +209,22 @@ def _run(o, h, l, c, atr, ema, filt, start, end, deposit, p):
             if n_ord[s] > 0:
                 eq_c += (oz[s] * c[i] - cost[s]) if s == 0 else (cost[s] - oz[s] * c[i])
         equity[k] = eq_c
+        peak = max(peak, eq_c)
 
     if died < 0:  # close what is left at the last close
         balance = equity[end - start - 1]
-    return balance, min_eq, died, cycles, stops, stopouts, equity
+    return balance, min_eq, died, cycles, stops, stopouts, equity, min(maxdd, 1.0)
 
 
 @njit(parallel=True, cache=True)
 def _run_batch(o, h, l, c, atr, emas, ema_idx, filt, start, end, deposits, P):
     out = np.empty(len(deposits))
+    dd = np.empty(len(deposits))
     for j in prange(len(deposits)):
-        out[j] = _run(o, h, l, c, atr, emas[ema_idx[j]], filt, start, end, deposits[j], P[j])[0]
-    return out
+        r = _run(o, h, l, c, atr, emas[ema_idx[j]], filt, start, end, deposits[j], P[j])
+        out[j] = r[0]
+        dd[j] = r[7]
+    return out, dd
 
 
 EMA_LENGTHS = (0, 1440, 7200, 28800)
@@ -246,17 +254,56 @@ class Market:
     def run(self, p: Params, start, end, deposit=1000.0):
         i0, i1 = self.span(start, end)
         arr = np.array(astuple(p), dtype=np.float64)
-        bal, min_eq, died, cyc, stops, so, eq = _run(
+        bal, min_eq, died, cyc, stops, so, eq, maxdd = _run(
             self.o, self.h, self.l, self.c, self.atr, self.ema(p.ema), self.filt, i0, i1, deposit, arr)
         return dict(balance=bal, min_eq=min_eq, died=self.index[died] if died >= 0 else None,
-                    cycles=cyc, stops=stops, stopouts=so,
+                    cycles=cyc, stops=stops, stopouts=so, maxdd=maxdd,
                     equity=pd.Series(eq, self.index[i0:i1]))
 
+    def _genes(self, params):
+        emas = np.stack([self.ema(n) for n in EMA_LENGTHS])
+        idx = np.array([EMA_LENGTHS.index(p.ema) for p in params], dtype=np.int64)
+        return emas, idx, np.array([astuple(p) for p in params], dtype=np.float64)
+
+    def lifecycles(self, params, first="2017-01", last="2024-09", months=24, deposit=1000.0):
+        """Start every config on the 1st of every month first..last, run up to `months`.
+
+        Returns death bar per (config, start) (-1 = alive at the horizon), equity at the end
+        of each month (config, start, month) and the start timestamps.
+        """
+        periods = pd.period_range(first, last, freq="M")
+        starts = np.array([self.span(p.start_time.strftime("%Y-%m-%d"), "2100-01-01")[0] for p in periods])
+        checks = np.array([[self.span((p + k + 1).start_time.strftime("%Y-%m-%d"), "2100-01-01")[0]
+                            for k in range(months)] for p in periods])
+        emas, idx, P = self._genes(params)
+        died, eq = _run_lifecycles(self.o, self.h, self.l, self.c, self.atr, emas, idx, self.filt,
+                                   starts, checks, deposit, P)
+        return died, eq, self.index[starts]
+
     def run_batch(self, params, deposits, start, end):
-        """End balances of many accounts over the same span (parallel)."""
+        """End balances and max drawdowns of many accounts over the same span (parallel)."""
         i0, i1 = self.span(start, end)
         emas = np.stack([self.ema(n) for n in EMA_LENGTHS])
         idx = np.array([EMA_LENGTHS.index(p.ema) for p in params], dtype=np.int64)
         P = np.array([astuple(p) for p in params], dtype=np.float64)
         return _run_batch(self.o, self.h, self.l, self.c, self.atr, emas, idx, self.filt, i0, i1,
                           np.asarray(deposits, dtype=np.float64), P)
+
+
+@njit(parallel=True, cache=True)
+def _run_lifecycles(o, h, l, c, atr, emas, ema_idx, filt, starts, checks, deposit, P):
+    """Each config from each start: bar of death (-1 if alive) and equity at checkpoints.
+
+    checks[s, k] is the bar index of checkpoint k for start s (end of month k + 1).
+    """
+    J, S, K = len(P), len(starts), checks.shape[1]
+    died = np.full((J, S), -1, np.int64)
+    eq = np.empty((J, S, K))
+    for js in prange(J * S):
+        j, s = js // S, js % S
+        i0, i1 = starts[s], checks[s, K - 1]
+        r = _run(o, h, l, c, atr, emas[ema_idx[j]], filt, i0, i1, deposit, P[j])
+        died[j, s] = r[2]
+        for k in range(K):
+            eq[j, s, k] = r[6][checks[s, k] - 1 - i0]
+    return died, eq

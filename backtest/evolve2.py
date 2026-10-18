@@ -44,8 +44,8 @@ def evolve(real, mirror, n0, seed):
         genes = [o["genes"] for o in pop]
         r0 = np.array([o["r"] for o in pop])
         m0 = np.array([o["m"] for o in pop])
-        r1 = real.run_batch(genes, r0, start, end)
-        m1 = mirror.run_batch(genes, m0, start, end)
+        r1, _ = real.run_batch(genes, r0, start, end)
+        m1, _ = mirror.run_batch(genes, m0, start, end)
         fit = ((r1 - r0) + (m1 - m0)) / 2
         alive, children = [], []
         for o, nr, nm, f in zip(pop, r1, m1, fit):

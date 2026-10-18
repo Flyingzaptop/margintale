@@ -82,7 +82,7 @@ def evolve(market, n0, seed):
         cap0 = sum(o["bal"] for o in pop)
         bal0 = np.array([o["bal"] for o in pop])
         children, alive, alive_before = [], [], pop
-        new_bal = market.run_batch([o["genes"] for o in pop], [o["bal"] for o in pop], start, end)
+        new_bal, _ = market.run_batch([o["genes"] for o in pop], [o["bal"] for o in pop], start, end)
         for o, nb in zip(pop, new_bal):
             profit = nb - o["bal"]
             o["bal"] = nb
