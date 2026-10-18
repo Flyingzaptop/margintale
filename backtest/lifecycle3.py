@@ -22,7 +22,7 @@ from evolve2 import sample2
 MONTHS = 24
 MIN_S12 = 0.6
 DEAD = 0.1  # engine.DEAD: an account is dead below this share of the deposit
-RISKS = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0, 12.0, 20.0]
+RISKS = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0, 12.0, 20.0, 30.0, 50.0, 80.0, 120.0]
 ELITE, CHILDREN = 200, 2000
 
 
