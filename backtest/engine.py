@@ -38,10 +38,31 @@ class Params:
     leverage: float = 0.0  # 0 = unlimited (no margin, dies at zero equity)
     risk: float = 0.0      # 0 = fixed 0.01 lot; else base oz per $1000 of balance
     ema: int = 0           # trend filter length in bars (dirs=3)
+    # regime filters, checked when a basket opens (0 = off)
+    er_win: int = 0        # efficiency-ratio window: 0 off, 1 = 1h, 2 = 4h, 3 = 1 day
+    er_max: float = 0.0    # open only while ER < er_max (low ER = choppy market)
+    sess: int = 0          # 0 any, 1 Asia 0-7, 2 London 7-12, 3 New York 12-17, 4 late 17-24 UTC
+    vol_max: float = 0.0   # open only while ATR / 20-day mean ATR < vol_max
 
 
 def load_m1(path=DATA):
     return add_atr(pd.read_parquet(path).set_index("timestamp"))
+
+
+ER_WINDOWS = (60, 240, 1440)
+SESSIONS = ((0, 24), (0, 7), (7, 12), (12, 17), (17, 24))
+
+
+def filters(bars):
+    """Rows: hour, ATR ratio, ER for each of ER_WINDOWS."""
+    c = bars.close
+    path = c.diff().abs()
+    rows = [bars.index.hour.to_numpy().astype(np.float64),
+            (bars.atr / bars.atr.rolling(28800, min_periods=1440).mean()).bfill().to_numpy()]
+    for w in ER_WINDOWS:
+        er = (c - c.shift(w)).abs() / path.rolling(w).sum()
+        rows.append(er.fillna(1.0).to_numpy())
+    return np.stack(rows)
 
 
 def add_atr(bars):
@@ -51,10 +72,13 @@ def add_atr(bars):
 
 
 @njit(cache=True)
-def _run(o, h, l, c, atr, ema, start, end, deposit, p):
+def _run(o, h, l, c, atr, ema, filt, start, end, deposit, p):
     dirs, step_v, step_atr, step_grow = p[0], p[1], p[2], p[3]
     mult, max_orders, tp_v, tp_atr = p[4], p[5], p[6], p[7]
     sl, leverage, risk = p[8], p[9], p[10]
+    er_win, er_max, sess, vol_max = int(p[12]), p[13], int(p[14]), p[15]
+    sess_lo = (0, 0, 7, 12, 17)[sess]
+    sess_hi = (24, 7, 12, 17, 24)[sess]
     n_ord = np.zeros(2, np.int64)
     added = np.zeros(2, np.bool_)
     oz = np.zeros(2)
@@ -80,6 +104,13 @@ def _run(o, h, l, c, atr, ema, start, end, deposit, p):
                 continue
             want = (dirs == s) or dirs == 2 or (dirs == 3 and (c[i - 1] > ema[i - 1]) == (s == 0))
             if not want:
+                continue
+            hr = filt[0, i]
+            if hr < sess_lo or hr >= sess_hi:
+                continue
+            if vol_max > 0 and filt[1, i - 1] >= vol_max:
+                continue
+            if er_win > 0 and er_max > 0 and filt[1 + er_win, i - 1] >= er_max:
                 continue
             eq_now = balance
             for t in range(2):
@@ -181,10 +212,10 @@ def _run(o, h, l, c, atr, ema, start, end, deposit, p):
 
 
 @njit(parallel=True, cache=True)
-def _run_batch(o, h, l, c, atr, emas, ema_idx, start, end, deposits, P):
+def _run_batch(o, h, l, c, atr, emas, ema_idx, filt, start, end, deposits, P):
     out = np.empty(len(deposits))
     for j in prange(len(deposits)):
-        out[j] = _run(o, h, l, c, atr, emas[ema_idx[j]], start, end, deposits[j], P[j])[0]
+        out[j] = _run(o, h, l, c, atr, emas[ema_idx[j]], filt, start, end, deposits[j], P[j])[0]
     return out
 
 
@@ -199,6 +230,7 @@ class Market:
         self.atr = b.atr.to_numpy()
         self.index = b.index
         self._ema = {}
+        self.filt = filters(b)
 
     def ema(self, n):
         if n not in self._ema:
@@ -215,7 +247,7 @@ class Market:
         i0, i1 = self.span(start, end)
         arr = np.array(astuple(p), dtype=np.float64)
         bal, min_eq, died, cyc, stops, so, eq = _run(
-            self.o, self.h, self.l, self.c, self.atr, self.ema(p.ema), i0, i1, deposit, arr)
+            self.o, self.h, self.l, self.c, self.atr, self.ema(p.ema), self.filt, i0, i1, deposit, arr)
         return dict(balance=bal, min_eq=min_eq, died=self.index[died] if died >= 0 else None,
                     cycles=cyc, stops=stops, stopouts=so,
                     equity=pd.Series(eq, self.index[i0:i1]))
@@ -226,5 +258,5 @@ class Market:
         emas = np.stack([self.ema(n) for n in EMA_LENGTHS])
         idx = np.array([EMA_LENGTHS.index(p.ema) for p in params], dtype=np.int64)
         P = np.array([astuple(p) for p in params], dtype=np.float64)
-        return _run_batch(self.o, self.h, self.l, self.c, self.atr, emas, idx, i0, i1,
+        return _run_batch(self.o, self.h, self.l, self.c, self.atr, emas, idx, self.filt, i0, i1,
                           np.asarray(deposits, dtype=np.float64), P)

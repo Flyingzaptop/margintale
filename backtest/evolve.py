@@ -37,12 +37,18 @@ CHOICES = {  # neighbour values for mutation
     "max_orders": [0, 3, 5, 8, 12], "tp_atr": [0, 1],
     "sl": [0.0, 0.05, 0.1, 0.2, 0.4], "leverage": [0, 100, 500], "risk": [0, 1, 2],
 }
+REGIME = {  # regime-filter genes, used by evolve2.py
+    "er_win": [0, 1, 2, 3], "er_max": [0.0, 0.02, 0.05, 0.1, 0.2],
+    "sess": [0, 1, 2, 3, 4], "vol_max": [0.0, 0.7, 1.0, 1.5],
+}
 STEP_VALUES = {0: [3, 5, 8, 12, 20, 30], 1: [2, 4, 8, 16, 30]}
 TP_VALUES = {0: [2, 5, 10, 20], 1: [1, 3, 6, 12]}
 
 
-def mutate(p, rng):
-    g = rng.choice(list(CHOICES) + ["step", "tp"])
+def mutate(p, rng, extra=()):
+    g = rng.choice(list(CHOICES) + ["step", "tp"] + list(extra))
+    if g in REGIME:
+        return replace(p, **{g: rng.choice(REGIME[g])})
     if g == "step":
         return replace(p, step=rng.choice(STEP_VALUES[p.step_atr]))
     if g == "tp":
