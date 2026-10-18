@@ -45,6 +45,15 @@ class Params:
     vol_max: float = 0.0   # open only while ATR / 20-day mean ATR < vol_max
 
 
+INT_GENES = {"dirs", "step_atr", "max_orders", "tp_atr", "ema", "er_win", "sess"}
+
+
+def params_from(row):
+    """Params from a mapping of gene values (e.g. a DataFrame row)."""
+    return Params(**{k: int(row[k]) if k in INT_GENES else float(row[k])
+                     for k in Params.__dataclass_fields__})
+
+
 def load_m1(path=DATA):
     return add_atr(pd.read_parquet(path).set_index("timestamp"))
 
@@ -247,8 +256,9 @@ class Market:
         return self._ema[n]
 
     def span(self, start, end):
-        i0 = max(int(self.index.searchsorted(pd.Timestamp(start, tz="UTC"))), 1)
-        i1 = int(self.index.searchsorted(pd.Timestamp(end, tz="UTC")))
+        utc = lambda t: (t if t.tzinfo else t.tz_localize("UTC")).floor("min")
+        i0 = max(int(self.index.searchsorted(utc(pd.Timestamp(start)))), 1)
+        i1 = int(self.index.searchsorted(utc(pd.Timestamp(end))))
         return i0, i1
 
     def run(self, p: Params, start, end, deposit=1000.0):
@@ -265,19 +275,32 @@ class Market:
         idx = np.array([EMA_LENGTHS.index(p.ema) for p in params], dtype=np.int64)
         return emas, idx, np.array([astuple(p) for p in params], dtype=np.float64)
 
-    def lifecycles(self, params, first="2017-01", last="2024-09", months=24, deposit=1000.0):
-        """Start every config on the 1st of every month first..last, run up to `months`.
+    def lifecycles(self, params, first="2017-01", last="2024-09", months=24, deposit=1000.0,
+                   start_times=None):
+        """Start every config on the 1st of every month first..last (or at each of
+        `start_times`), run up to `months` (checkpoints every 30.44 days for start_times).
 
-        Returns death bar per (config, start) (-1 = alive at the horizon), equity at the end
-        of each month (config, start, month) and the start timestamps.
+        Returns death bar per (config, start) (-1 = alive at the horizon), equity at each
+        monthly checkpoint (config, start, month) and the start timestamps; the max
+        drawdown per (config, start) is left in self.last_dd.
         """
-        periods = pd.period_range(first, last, freq="M")
-        starts = np.array([self.span(p.start_time.strftime("%Y-%m-%d"), "2100-01-01")[0] for p in periods])
-        checks = np.array([[self.span((p + k + 1).start_time.strftime("%Y-%m-%d"), "2100-01-01")[0]
-                            for k in range(months)] for p in periods])
+        if start_times is None:
+            periods = pd.period_range(first, last, freq="M")
+            t0 = [p.start_time for p in periods]
+            tk = [[(p + k + 1).start_time for k in range(months)] for p in periods]
+        else:
+            t0 = list(start_times)
+            tk = [[t + pd.Timedelta(days=30.44 * (k + 1)) for k in range(months)] for t in t0]
+        def pos(t):
+            t = pd.Timestamp(t).floor("min")
+            return max(int(self.index.searchsorted(t if t.tzinfo else t.tz_localize("UTC"))), 1)
+
+        starts = np.array([pos(t) for t in t0])
+        checks = np.array([[pos(t) for t in row] for row in tk])
         emas, idx, P = self._genes(params)
-        died, eq = _run_lifecycles(self.o, self.h, self.l, self.c, self.atr, emas, idx, self.filt,
-                                   starts, checks, deposit, P)
+        died, eq, dd = _run_lifecycles(self.o, self.h, self.l, self.c, self.atr, emas, idx, self.filt,
+                                       starts, checks, deposit, P)
+        self.last_dd = dd  # max drawdown per (config, start) over the whole run
         return died, eq, self.index[starts]
 
     def run_batch(self, params, deposits, start, end):
@@ -298,12 +321,14 @@ def _run_lifecycles(o, h, l, c, atr, emas, ema_idx, filt, starts, checks, deposi
     """
     J, S, K = len(P), len(starts), checks.shape[1]
     died = np.full((J, S), -1, np.int64)
+    dd = np.empty((J, S))
     eq = np.empty((J, S, K))
     for js in prange(J * S):
         j, s = js // S, js % S
         i0, i1 = starts[s], checks[s, K - 1]
         r = _run(o, h, l, c, atr, emas[ema_idx[j]], filt, i0, i1, deposit, P[j])
         died[j, s] = r[2]
+        dd[j, s] = r[7]
         for k in range(K):
             eq[j, s, k] = r[6][checks[s, k] - 1 - i0]
-    return died, eq
+    return died, eq, dd

@@ -12,17 +12,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from engine import Market, Params
+from engine import Market, params_from as params
 from lifecycle import DEAD, MONTHS, metrics
 
 ROOT = Path(__file__).resolve().parent.parent
-GENES = list(Params.__dataclass_fields__)
-INT_GENES = {"dirs", "step_atr", "max_orders", "tp_atr", "ema", "er_win", "sess"}
-
-
-def params(row):
-    return Params(**{k: int(row[k]) if k in INT_GENES else float(row[k]) for k in GENES})
-
 
 path = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "results" / "lifecycle_s1.parquet"
 df = pd.read_parquet(path)
