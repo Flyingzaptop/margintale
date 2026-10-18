@@ -20,7 +20,7 @@ from numba import njit, prange
 
 DATA = Path(__file__).resolve().parent.parent / "data" / "XAUUSD_41.parquet"
 SPREAD = 0.30 + 0.07  # spread + $7/lot round-turn commission
-STOP_OUT = 0.5   # margin level at which the broker closes everything
+STOP_OUT = 0.3   # margin level at which the broker closes everything (Spotware: 30%)
 DEAD = 0.1       # account counts as dead below this share of the deposit
 
 
