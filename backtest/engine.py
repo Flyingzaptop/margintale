@@ -46,6 +46,11 @@ class Params:
     # PWM of aggressiveness: with pwm_k > 0 the lot grows as risk(E) = risk * (1 - (D / E) ** pwm_k)
     # oz per $1000 of equity E (D = deposit, 0 while E <= D), never below 0.01 lot
     pwm_k: float = 0.0
+    # profit withdrawal: every wd_days trading days, when no basket is open, take wd_frac of
+    # the balance above wd_floor x deposit off the account (0 = never)
+    wd_days: int = 0
+    wd_frac: float = 0.0
+    wd_floor: float = 1.0
 
 
 INT_GENES = {"dirs", "step_atr", "max_orders", "tp_atr", "ema", "er_win", "sess"}
@@ -90,6 +95,9 @@ def _run(o, h, l, c, atr, ema, filt, start, end, deposit, p):
     sl, leverage, risk = p[8], p[9], p[10]
     er_win, er_max, sess, vol_max = int(p[12]), p[13], int(p[14]), p[15]
     pwm_k = p[16]
+    wd_days, wd_frac, wd_floor = int(p[17]), p[18], p[19]
+    withdrawn = 0.0
+    days = 0
     sess_lo = (0, 0, 7, 12, 17)[sess]
     sess_hi = (24, 7, 12, 17, 24)[sess]
     n_ord = np.zeros(2, np.int64)
@@ -113,6 +121,16 @@ def _run(o, h, l, c, atr, ema, filt, start, end, deposit, p):
 
     for i in range(start, end):
         k = i - start
+        if wd_days > 0 and filt[0, i] < filt[0, i - 1]:  # new trading day
+            days += 1
+            if days >= wd_days and n_ord[0] == 0 and n_ord[1] == 0:
+                days = 0
+                excess = balance - wd_floor * deposit
+                if excess > 0:
+                    x = wd_frac * excess
+                    balance -= x
+                    withdrawn += x
+                    peak -= x
         # open baskets
         for s in range(2):
             if n_ord[s] > 0:
@@ -229,7 +247,7 @@ def _run(o, h, l, c, atr, ema, filt, start, end, deposit, p):
 
     if died < 0:  # close what is left at the last close
         balance = equity[end - start - 1]
-    return balance, min_eq, died, cycles, stops, stopouts, equity, min(maxdd, 1.0)
+    return balance, min_eq, died, cycles, stops, stopouts, equity, min(maxdd, 1.0), withdrawn
 
 
 @njit(parallel=True, cache=True)
@@ -271,10 +289,10 @@ class Market:
     def run(self, p: Params, start, end, deposit=1000.0):
         i0, i1 = self.span(start, end)
         arr = np.array(astuple(p), dtype=np.float64)
-        bal, min_eq, died, cyc, stops, so, eq, maxdd = _run(
+        bal, min_eq, died, cyc, stops, so, eq, maxdd, wd = _run(
             self.o, self.h, self.l, self.c, self.atr, self.ema(p.ema), self.filt, i0, i1, deposit, arr)
         return dict(balance=bal, min_eq=min_eq, died=self.index[died] if died >= 0 else None,
-                    cycles=cyc, stops=stops, stopouts=so, maxdd=maxdd,
+                    cycles=cyc, stops=stops, stopouts=so, maxdd=maxdd, withdrawn=wd,
                     equity=pd.Series(eq, self.index[i0:i1]))
 
     def _genes(self, params):
@@ -305,10 +323,11 @@ class Market:
         starts = np.array([pos(t) for t in t0])
         checks = np.array([[pos(t) for t in row] for row in tk])
         emas, idx, P = self._genes(params)
-        died, eq, dd = _run_lifecycles(self.o, self.h, self.l, self.c, self.atr, emas, idx, self.filt,
+        died, eq, dd, wd = _run_lifecycles(self.o, self.h, self.l, self.c, self.atr, emas, idx, self.filt,
                                        starts, checks, np.full(len(starts), float(deposit)) if deposits is None
                                        else np.asarray(deposits, dtype=np.float64), P)
         self.last_dd = dd  # max drawdown per (config, start) over the whole run
+        self.last_wd = wd  # money withdrawn per (config, start) over the whole run
         return died, eq, self.index[starts]
 
     def run_batch(self, params, deposits, start, end):
@@ -330,6 +349,7 @@ def _run_lifecycles(o, h, l, c, atr, emas, ema_idx, filt, starts, checks, deposi
     J, S, K = len(P), len(starts), checks.shape[1]
     died = np.full((J, S), -1, np.int64)
     dd = np.empty((J, S))
+    wd = np.empty((J, S))
     eq = np.empty((J, S, K))
     for js in prange(J * S):
         j, s = js // S, js % S
@@ -337,6 +357,7 @@ def _run_lifecycles(o, h, l, c, atr, emas, ema_idx, filt, starts, checks, deposi
         r = _run(o, h, l, c, atr, emas[ema_idx[j]], filt, i0, i1, deposits[s], P[j])
         died[j, s] = r[2]
         dd[j, s] = r[7]
+        wd[j, s] = r[8]
         for k in range(K):
             eq[j, s, k] = r[6][checks[s, k] - 1 - i0]
-    return died, eq, dd
+    return died, eq, dd, wd
