@@ -43,6 +43,9 @@ class Params:
     er_max: float = 0.0    # open only while ER < er_max (low ER = choppy market)
     sess: int = 0          # 0 any, 1 Asia 0-7, 2 London 7-12, 3 New York 12-17, 4 late 17-24 UTC
     vol_max: float = 0.0   # open only while ATR / 20-day mean ATR < vol_max
+    # PWM of aggressiveness: with pwm_k > 0 the lot grows as risk(E) = risk * (1 - (D / E) ** pwm_k)
+    # oz per $1000 of equity E (D = deposit, 0 while E <= D), never below 0.01 lot
+    pwm_k: float = 0.0
 
 
 INT_GENES = {"dirs", "step_atr", "max_orders", "tp_atr", "ema", "er_win", "sess"}
@@ -86,6 +89,7 @@ def _run(o, h, l, c, atr, ema, filt, start, end, deposit, p):
     mult, max_orders, tp_v, tp_atr = p[4], p[5], p[6], p[7]
     sl, leverage, risk = p[8], p[9], p[10]
     er_win, er_max, sess, vol_max = int(p[12]), p[13], int(p[14]), p[15]
+    pwm_k = p[16]
     sess_lo = (0, 0, 7, 12, 17)[sess]
     sess_hi = (24, 7, 12, 17, 24)[sess]
     n_ord = np.zeros(2, np.int64)
@@ -127,7 +131,10 @@ def _run(o, h, l, c, atr, ema, filt, start, end, deposit, p):
             for t in range(2):
                 if n_ord[t] > 0:
                     eq_now += (oz[t] * o[i] - cost[t]) if t == 0 else (cost[t] - oz[t] * o[i])
-            b = 1.0 if risk == 0 else max(1.0, np.floor(eq_now / 1000.0 * risk))
+            r = risk
+            if pwm_k > 0:
+                r = risk * (1.0 - (deposit / eq_now) ** pwm_k) if eq_now > deposit else 0.0
+            b = 1.0 if r <= 0 else max(1.0, np.floor(eq_now / 1000.0 * r))
             base[s] = b
             step[s] = step_v * atr[i - 1] if step_atr else step_v
             tp[s] = tp_v * atr[i - 1] if tp_atr else tp_v
@@ -276,7 +283,7 @@ class Market:
         return emas, idx, np.array([astuple(p) for p in params], dtype=np.float64)
 
     def lifecycles(self, params, first="2017-01", last="2024-09", months=24, deposit=1000.0,
-                   start_times=None):
+                   start_times=None, deposits=None):
         """Start every config on the 1st of every month first..last (or at each of
         `start_times`), run up to `months` (checkpoints every 30.44 days for start_times).
 
@@ -299,7 +306,8 @@ class Market:
         checks = np.array([[pos(t) for t in row] for row in tk])
         emas, idx, P = self._genes(params)
         died, eq, dd = _run_lifecycles(self.o, self.h, self.l, self.c, self.atr, emas, idx, self.filt,
-                                       starts, checks, deposit, P)
+                                       starts, checks, np.full(len(starts), float(deposit)) if deposits is None
+                                       else np.asarray(deposits, dtype=np.float64), P)
         self.last_dd = dd  # max drawdown per (config, start) over the whole run
         return died, eq, self.index[starts]
 
@@ -314,7 +322,7 @@ class Market:
 
 
 @njit(parallel=True, cache=True)
-def _run_lifecycles(o, h, l, c, atr, emas, ema_idx, filt, starts, checks, deposit, P):
+def _run_lifecycles(o, h, l, c, atr, emas, ema_idx, filt, starts, checks, deposits, P):
     """Each config from each start: bar of death (-1 if alive) and equity at checkpoints.
 
     checks[s, k] is the bar index of checkpoint k for start s (end of month k + 1).
@@ -326,7 +334,7 @@ def _run_lifecycles(o, h, l, c, atr, emas, ema_idx, filt, starts, checks, deposi
     for js in prange(J * S):
         j, s = js // S, js % S
         i0, i1 = starts[s], checks[s, K - 1]
-        r = _run(o, h, l, c, atr, emas[ema_idx[j]], filt, i0, i1, deposit, P[j])
+        r = _run(o, h, l, c, atr, emas[ema_idx[j]], filt, i0, i1, deposits[s], P[j])
         died[j, s] = r[2]
         dd[j, s] = r[7]
         for k in range(K):
