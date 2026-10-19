@@ -23,6 +23,7 @@ GRAM = 1 / 31.1035
 GRAMS = [1, 2, 3, 5, 8, 12, 20, 30, 50]           # fixed base size, grams
 RISKS = [0.0, 0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 12.0, 20.0, 50.0]
 TARGETS = [2.0, 3.0, 5.0, 10.0, 20.0, 50.0]
+KILLS = [0.0, 0.2, 0.3, 0.5, 0.7]
 ELITE, CHILDREN, MONTHS = 200, 1500, 6
 
 
@@ -32,7 +33,7 @@ def fix(p):
 
 def sample(rng):
     return fix(replace(sample2(rng), risk=rng.choice(RISKS), lot_oz=rng.choice(GRAMS) * GRAM,
-                       target=rng.choice(TARGETS)))
+                       target=rng.choice(TARGETS), kill_dd=rng.choice(KILLS)))
 
 
 def mutate(p, rng):
@@ -43,6 +44,8 @@ def mutate(p, rng):
         return fix(replace(p, lot_oz=rng.choice(GRAMS) * GRAM))
     if u < 0.34:
         return fix(replace(p, target=rng.choice(TARGETS)))
+    if u < 0.44:
+        return fix(replace(p, kill_dd=rng.choice(KILLS)))
     return fix(mutate1(p, rng, REGIME))
 
 
@@ -53,7 +56,8 @@ def metrics(eq, dep, targets):
     v3 = x[:, :, 2]
     return pd.DataFrame(dict(score=v3.mean(1), ev3=v3.mean(1), med3=np.median(v3, 1),
                              p_hit1=hit[:, :, 0].mean(1), p_hit3=hit[:, :, 2].mean(1), p_hit6=hit[:, :, 5].mean(1),
-                             p_lose3=(v3 < 1).mean(1), dead3=(v3 < 0.1).mean(1)))
+                             p_lose3=(v3 < 1).mean(1), dead3=(v3 < 0.1).mean(1),
+                             lose_avg3=np.array([r[r < 1].mean() if (r < 1).any() else 1.0 for r in v3])))
 
 
 def key(p):
@@ -102,12 +106,12 @@ if __name__ == "__main__":
     out = pd.concat([df.head(50).reset_index(drop=True),
                      metrics(eq, a.deposit, [q.target for q in fin]).add_prefix("test_")], axis=1)
     out["grams"] = (out.lot_oz / GRAM).round()
-    tag = f"d{int(a.deposit)}_s{a.seed}"
+    tag = f"d{int(a.deposit)}_s{a.seed}_kill"
     df.to_parquet(OUT / f"aggro2_{tag}.parquet")
     out.to_csv(OUT / f"aggro2_{tag}_final.csv", index=False)
     pd.set_option("display.width", 300)
     pd.set_option("display.max_columns", 60)
     cols = ["dirs", "step", "step_atr", "step_grow", "mult", "max_orders", "tp", "tp_atr", "sl", "risk", "grams",
-            "target", "er_win", "er_max", "sess", "vol_max", "ev3", "med3", "p_hit1", "p_hit3", "p_hit6", "p_lose3",
-            "test_ev3", "test_p_hit1", "test_p_hit3", "test_p_hit6", "test_p_lose3"]
+            "target", "kill_dd", "er_win", "er_max", "sess", "vol_max", "ev3", "med3", "p_hit1", "p_hit3", "p_hit6", "p_lose3",
+            "lose_avg3", "test_ev3", "test_p_hit1", "test_p_hit3", "test_p_hit6", "test_p_lose3"]
     print(out[cols].head(20).round(2).to_string())

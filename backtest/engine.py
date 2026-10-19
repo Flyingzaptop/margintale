@@ -62,6 +62,7 @@ class Params:
     unit_oz: float = 1.0
     extra_cost: float = 0.0
     target: float = 0.0    # stop for good (close all, keep the money) once equity >= target x deposit
+    kill_dd: float = 0.0   # controlled death: stop for good once worst-case equity < (1 - kill_dd) x its peak
 
 
 INT_GENES = {"dirs", "step_atr", "max_orders", "tp_atr", "ema", "er_win", "sess"}
@@ -120,6 +121,7 @@ def _run_core(o, h, l, c, atr, ema, filt, start, end, deposit, p, dep_idx, dep_a
     lot_oz = p[22]
     unit, cost_oz = p[23], SPREAD + p[24]
     target = p[25]
+    kill_dd = p[26]
     withdrawn = 0.0
     days = 0
     age = 0
@@ -266,6 +268,14 @@ def _run_core(o, h, l, c, atr, ema, filt, start, end, deposit, p, dep_idx, dep_a
                 if leverage > 0:
                     marg += oz[s] * worst / leverage
         min_eq = min(min_eq, eq_w)
+        if kill_dd > 0 and eq_w <= (1.0 - kill_dd) * peak:  # kill switch: close at the worst price, keep the rest
+            balance = max(eq_w, 0.0)
+            n_ord[:] = 0
+            equity[k:] = balance
+            if rec_wd:
+                wd_arr[k:] = withdrawn
+            maxdd = max(maxdd, 1.0 - eq_w / peak)
+            break
         maxdd = max(maxdd, 1.0 - eq_w / peak)
         if eq_w <= 0 or (leverage > 0 and marg > 0 and eq_w <= STOP_OUT * marg):
             balance = max(eq_w, 0.0)
