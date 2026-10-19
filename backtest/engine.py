@@ -61,6 +61,7 @@ class Params:
     # a gram contract such as GAUUSD 0.01 lot = 1 g = 1 / 31.1035 oz); extra entry cost $ per oz
     unit_oz: float = 1.0
     extra_cost: float = 0.0
+    target: float = 0.0    # stop for good (close all, keep the money) once equity >= target x deposit
 
 
 INT_GENES = {"dirs", "step_atr", "max_orders", "tp_atr", "ema", "er_win", "sess"}
@@ -118,6 +119,7 @@ def _run_core(o, h, l, c, atr, ema, filt, start, end, deposit, p, dep_idx, dep_a
     wd_vol_g, wd_tau = p[20], p[21]
     lot_oz = p[22]
     unit, cost_oz = p[23], SPREAD + p[24]
+    target = p[25]
     withdrawn = 0.0
     days = 0
     age = 0
@@ -306,6 +308,13 @@ def _run_core(o, h, l, c, atr, ema, filt, start, end, deposit, p, dep_idx, dep_a
                 eq_c += (oz[s] * c[i] - cost[s]) if s == 0 else (cost[s] - oz[s] * c[i])
         equity[k] = eq_c
         peak = max(peak, eq_c)
+        if target > 0 and eq_c >= target * deposit:  # goal reached: close everything and stop
+            balance = eq_c
+            n_ord[:] = 0
+            equity[k:] = eq_c
+            if rec_wd:
+                wd_arr[k:] = withdrawn
+            break
 
     if died < 0:  # close what is left at the last close
         balance = equity[end - start - 1]
