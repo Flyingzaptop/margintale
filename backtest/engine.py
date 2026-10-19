@@ -393,7 +393,7 @@ class Market:
         return emas, idx, np.array([astuple(p) for p in params], dtype=np.float64)
 
     def lifecycles(self, params, first="2017-01", last="2024-09", months=24, deposit=1000.0,
-                   start_times=None, deposits=None):
+                   start_times=None, deposits=None, step_days=30.44):
         """Start every config on the 1st of every month first..last (or at each of
         `start_times`), run up to `months` (checkpoints every 30.44 days for start_times).
 
@@ -407,7 +407,7 @@ class Market:
             tk = [[(p + k + 1).start_time for k in range(months)] for p in periods]
         else:
             t0 = list(start_times)
-            tk = [[t + pd.Timedelta(days=30.44 * (k + 1)) for k in range(months)] for t in t0]
+            tk = [[t + pd.Timedelta(days=step_days * (k + 1)) for k in range(months)] for t in t0]
         def pos(t):
             t = pd.Timestamp(t).floor("min")
             return max(int(self.index.searchsorted(t if t.tzinfo else t.tz_localize("UTC"))), 1)
