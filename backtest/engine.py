@@ -94,6 +94,16 @@ def filters(bars):
     return np.stack(rows)
 
 
+def detrended(path=DATA, days=30, level=2000.0):
+    """Gold with its long trend removed: price / EMA(days) x level. Same intraday moves and
+    crashes in relative terms, no multi-year drift."""
+    b = pd.read_parquet(path).set_index("timestamp")
+    f = level / b.close.ewm(span=days * 1440).mean()
+    for x in ("open", "high", "low", "close"):
+        b[x] = b[x] * f
+    return add_atr(b)
+
+
 def add_atr(bars):
     rng5 = bars.high.rolling(5).max() - bars.low.rolling(5).min()
     bars["atr"] = rng5.rolling(1440, min_periods=60).mean().bfill()  # mean 5m range over a day

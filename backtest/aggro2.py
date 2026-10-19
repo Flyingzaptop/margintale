@@ -15,7 +15,7 @@ from dataclasses import asdict, replace
 import numpy as np
 import pandas as pd
 
-from engine import Market
+from engine import Market, detrended
 from evolve import OUT, REGIME, mutate as mutate1
 from evolve2 import sample2
 
@@ -27,8 +27,22 @@ KILLS = [0.0, 0.2, 0.3, 0.5, 0.7]
 ELITE, CHILDREN, MONTHS = 200, 1500, 6
 
 
+ATR_ONLY = [False]
+
+
 def fix(p):
-    return replace(p, leverage=100.0, unit_oz=GRAM)
+    p = replace(p, leverage=100.0, unit_oz=GRAM)
+    if ATR_ONLY[0]:  # scale-free: every distance in ATR
+        if not p.step_atr:
+            p = replace(p, step_atr=1, step=rng_atr(p.step))
+        if not p.tp_atr:
+            p = replace(p, tp_atr=1, tp=rng_atr(p.tp))
+    return p
+
+
+def rng_atr(v):
+    """Map a $ distance gene to a comparable ATR multiple (ATR ~ $3-10)."""
+    return float(min([1, 2, 3, 4, 6, 8, 12, 16, 30], key=lambda k: abs(k - v / 4)))
 
 
 def sample(rng):
@@ -70,9 +84,15 @@ if __name__ == "__main__":
     ap.add_argument("--n", type=int, default=3000)
     ap.add_argument("--gens", type=int, default=8)
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--detrend", action="store_true", help="search on gold / EMA(30 days), distances in ATR only")
+    ap.add_argument("--target", type=float, default=0, help="fix the target gene")
     a = ap.parse_args()
     rng = random.Random(a.seed)
-    m = Market()
+    if a.detrend:
+        ATR_ONLY[0] = True
+    if a.target:
+        TARGETS[:] = [a.target]
+    m = Market(detrended()) if a.detrend else Market()
     seen = {}
 
     def add(genes, chunk=500):
@@ -106,7 +126,7 @@ if __name__ == "__main__":
     out = pd.concat([df.head(50).reset_index(drop=True),
                      metrics(eq, a.deposit, [q.target for q in fin]).add_prefix("test_")], axis=1)
     out["grams"] = (out.lot_oz / GRAM).round()
-    tag = f"d{int(a.deposit)}_s{a.seed}_kill"
+    tag = f"d{int(a.deposit)}_s{a.seed}_kill" + ("_detrend" if a.detrend else "") + (f"_T{a.target:g}" if a.target else "")
     df.to_parquet(OUT / f"aggro2_{tag}.parquet")
     out.to_csv(OUT / f"aggro2_{tag}_final.csv", index=False)
     pd.set_option("display.width", 300)
